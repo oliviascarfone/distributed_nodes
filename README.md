@@ -1,7 +1,9 @@
 LFG
 
+Python: 3.8.2
+
 ## Packages
- 
+
 - numpy
     - https://numpy.org/install/
 
