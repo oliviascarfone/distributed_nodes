@@ -1,73 +1,115 @@
 import numpy
+import music21
+import glob
+import pickle
 
 from tensorflow import keras
 #from keras.models import Sequential
 #from keras.layers import LSTM, Dense, Dropout, Masking, Embedding
 #from keras.callbacks import EarlyStopping, ModelCheckpoint
 
-TEST_DATA = [[3,4,2,3,4,6],[3,5,7,5,3,1,5,8,9,1],[1,2,3,3,4,6,3,2,3,4,5,2,1,2],[6,2,1,4,1,1,3],[3,1,7,3,5,6,9,6,7,5,7,3,6]]
-TRAINING_SIZE = 3
+def get_notes():
+    """ Get all the notes and chords from the midi files in the ./midi_songs directory """
+    notes = []
+
+    for file in glob.glob("midi_me/*.mid"):
+        print(file)
+        midi = music21.converter.parse(file)
+
+        print("Parsing %s" % file)
+
+        notes_to_parse = None
+
+        try: # file has instrument parts
+            s2 = music21.instrument.partitionByInstrument(midi)
+            notes_to_parse = s2.parts[0].recurse() 
+        except: # file has notes in a flat structure
+            notes_to_parse = midi.flat.notes
+
+        for element in notes_to_parse:
+            if isinstance(element, music21.note.Note):
+                notes.append(str(element.pitch))
+            elif isinstance(element, music21.chord.Chord):
+                notes.append('.'.join(str(n) for n in element.normalOrder))
+
+    with open('data/notes', 'wb') as filepath:
+        pickle.dump(notes, filepath)
+
+    return notes
 
 
-def create_features_and_labels(tokens):
-    labels = []
-    features = []
-
-    for token in tokens:
-        for i in range(TRAINING_SIZE, len(token)):
-           splice = token[i - TRAINING_SIZE:i + 1]
-
-           features.append(splice[:-1])
-           labels.append(splice[-1])
+def create_input_and_output(sequence):
+    network_input = []
+    network_output = []
+    note_to_int = {}
+    sequence_length = 10
+    pitchnames = sorted(set(item for item in notes))
     
-    return (numpy.array(features), labels)
-         
-def one_hot_code(labels):
-    num_notes = 10 # max note + 1 for index reasons
-    label_array = numpy.zeros((len(features), num_notes), dtype=numpy.int8)
+    for number, note in enumerate(pitchnames):
+        note_to_int[note] = number
+
+    for i in range(0, len(notes) - sequence_length, 1):
+        sequence_in = notes[i:i + sequence_length]
+        sequence_out = notes[i + sequence_length]
+        network_input.append([note_to_int[char] for char in sequence_in])
+        network_output.append(note_to_int[sequence_out])
+    n_patterns = len(network_input)
     
-    for index, note in enumerate(labels):
-        label_array[index, note] = 1
-   
-    return numpy.array(label_array.shape)
+    network_input = numpy.reshape(network_input, (n_patterns, sequence_length, 1))
+
+    network_input = network_input / float(len(pitchnames))
+
+    try:
+        network_output = keras.utils.to_categorical(network_output)
+    except ValueError:
+        pass
+
+    return (network_input, network_output, len(pitchnames))
     
 
-def build_network(features, labels, num_notes):
+def build_network(network_input, network_output, num_notes):
 
     model = keras.Sequential()
 
-    model.add(keras.layers.Masking(mask_value=0))
-
     model.add(keras.layers.LSTM(
-        256,
-        #input_shape=(features.shape[1], features.shape[2]),
+        512,
+        input_shape=(network_input.shape[1], network_input.shape[2]),
+        recurrent_dropout=0.3,
         return_sequences=True
     ))
-
-    model.add(keras.layers.Dropout(0.4))
-    model.add(keras.layers.LSTM(512, return_sequences=True))
-    model.add(keras.layers.Dropout(0.2))
-    model.add(keras.layers.LSTM(256))
+    model.add(keras.layers.LSTM(512, return_sequences=True, recurrent_dropout=0.3,))
+    model.add(keras.layers.LSTM(512))
+    model.add(keras.layers.BatchNormalization())
+    model.add(keras.layers.Dropout(0.3))
     model.add(keras.layers.Dense(256))
-    model.add(keras.layers.Dropout(0.4))
-    model.add(keras.layers.Dense(128))
+    model.add(keras.layers.Activation('relu'))
+    model.add(keras.layers.BatchNormalization())
+    model.add(keras.layers.Dropout(0.3))
+    model.add(keras.layers.Dense(num_notes))
     model.add(keras.layers.Activation('softmax'))
     model.compile(loss='categorical_crossentropy', optimizer='rmsprop')
 
-    callbacks = [keras.callbacks.EarlyStopping(monitor='val_loss', patience=5),
-                 keras.callbacks.ModelCheckpoint('../models/model.h5', save_best_only=True, 
-                                 save_weights_only=False)]
+    return model
 
-    
-    history = model.fit(features,  labels, 
-                        batch_size=512, epochs=150,
-                        callbacks=callbacks)
+
+def thomas_the_train(model, network_input, network_output):
+    filepath = "weights-improvement-{epoch:02d}-{loss:.4f}-bigger.hdf5"
+    checkpoint = keras.callbacks.ModelCheckpoint(
+        filepath,
+        monitor='loss',
+        verbose=0,
+        save_best_only=True,
+        mode='min'
+    )
+    callbacks_list = [checkpoint]
+
+    model.fit(network_input, network_output, epochs=10, batch_size=128, callbacks=callbacks_list)
 
 
 if __name__ == "__main__":
-    features, labels = create_features_and_labels(TEST_DATA) 
-    # print(features)
-    # print(labels)
-    label_array = one_hot_code(labels)
-    build_network(features, label_array, 10)
+    notes = get_notes()
+    network_input, network_output, num_notes = create_input_and_output(notes) 
+    model = build_network(network_input, network_output, num_notes)
+    thomas_the_train(model, network_input, network_output)
+
     
