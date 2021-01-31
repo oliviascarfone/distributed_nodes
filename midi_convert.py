@@ -45,6 +45,8 @@ n_patterns = len(network_input)
 # reshape the input into a format compatible with LSTM layers
 # reshapes it into a list of network_input length of lists containing each individual note
 # seems wrong
+# arr = [1,2,3,4,5,6,7,8,9,10,11,12]
+# np.reshape(arr, (4,3,1)) ==> [[1],[2],[3], [[4],[5],[6]], [[7],[8],9], [10,11,12]]
 network_input = numpy.reshape(network_input, (n_patterns, sequence_length, 1))
 # normalize input
 network_input = network_input / float(n_vocab)
